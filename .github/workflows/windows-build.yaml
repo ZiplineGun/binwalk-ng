@@ -1,0 +1,77 @@
+name: Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build (${{ matrix.target }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+          # ARM64 Windows も欲しい場合は下記を有効化
+          # - target: aarch64-pc-windows-msvc
+    steps:
+      - name: Code checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dir = "binwalk-ng-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $dir | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/binwalk.exe" $dir
+          Copy-Item LICENSE, README.md $dir
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binwalk-ng-${{ matrix.target }}
+          path: |
+            binwalk-ng-${{ matrix.target }}.zip
+            target/${{ matrix.target }}/release/binwalk.exe
+
+  release:
+    name: Attach to GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binwalk-ng-*
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: binwalk-ng-*.zip
